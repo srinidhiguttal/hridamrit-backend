@@ -1,35 +1,53 @@
-from flask import Flask, request, jsonify, redirect, session, url_for
+from flask import Flask, request, jsonify, redirect, session
 from google_auth_oauthlib.flow import Flow
 import requests, os, time
 from flask_cors import CORS
-from predict import predict_heart_attack  # Your existing predict function
+from predict import predict_heart_attack  # Your existing ML predict function
 
 app = Flask(__name__)
-import os
-app.secret_key = os.urandom(24)  # Replace with a secure random key
-CORS(app)  # Enable CORS for React frontend
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # for local testing
+app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))  # ✅ Masked, loaded from environment
+CORS(app)
 
-CLIENT_SECRETS_FILE = "client_secret.json"
+# Allow HTTP for local testing only
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
+# ✅ Masked: use environment variable instead of hardcoding file or secret
+CLIENT_SECRETS_FILE = os.getenv("GOOGLE_CLIENT_SECRET_FILE", "client_secret.json")
+
 SCOPES = [
     "https://www.googleapis.com/auth/fitness.activity.read",
     "https://www.googleapis.com/auth/fitness.sleep.read",
     "https://www.googleapis.com/auth/fitness.body.read",
 ]
 
+# ✅ Dynamically detect environment (local or Render)
+BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000")
+
 # ---------------- GOOGLE LOGIN ----------------
 @app.route("/login")
 def login():
-    redirect_uri = "http://localhost:5000/oauth2callback"  # must match Google Cloud
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=redirect_uri)
-    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true")
+    redirect_uri = f"{BASE_URL}/oauth2callback"
+    flow = Flow.from_client_secrets_file(
+        CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri
+    )
+    auth_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true"
+    )
     session["state"] = state
     return redirect(auth_url)
 
 @app.route("/oauth2callback")
 def oauth2callback():
-    redirect_uri = "http://localhost:5000/oauth2callback"
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, state=session.get("state"), redirect_uri=redirect_uri)
+    redirect_uri = f"{BASE_URL}/oauth2callback"
+    flow = Flow.from_client_secrets_file(
+        CLIENT_SECRETS_FILE,
+        scopes=SCOPES,
+        state=session.get("state"),
+        redirect_uri=redirect_uri
+    )
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     session["token"] = credentials.token
@@ -39,7 +57,7 @@ def oauth2callback():
 def get_fit_data(token):
     headers = {"Authorization": f"Bearer {token}"}
     now = int(time.time() * 1000)
-    one_week_ago = now - 7*24*60*60*1000
+    one_week_ago = now - 7 * 24 * 60 * 60 * 1000
 
     def aggregate_data(data_type):
         body = {
@@ -67,11 +85,10 @@ def get_fit_data(token):
     fit_data = {
         "avg_steps": aggregate_data("com.google.step_count.delta"),
         "avg_calories": aggregate_data("com.google.calories.expended"),
-        "height": aggregate_data("com.google.height"),  # meters
-        "weight": aggregate_data("com.google.weight")   # kg
+        "height": aggregate_data("com.google.height"),
+        "weight": aggregate_data("com.google.weight")
     }
 
-    # Defaults if no data
     if fit_data["height"] == 0:
         fit_data["height"] = 1.7
     if fit_data["weight"] == 0:
@@ -82,11 +99,11 @@ def get_fit_data(token):
 # ---------------- PREDICTION ----------------
 @app.route("/predict_fit", methods=["GET", "POST"])
 def predict_fit():
-    # Get Fit data if logged in
     token = session.get("token")
-    fit_data = get_fit_data(token) if token else {"avg_steps": 4000, "avg_calories": 2000, "height": 1.7, "weight": 70}
+    fit_data = get_fit_data(token) if token else {
+        "avg_steps": 4000, "avg_calories": 2000, "height": 1.7, "weight": 70
+    }
 
-    # Get manual input from user (POST JSON)
     manual_data = {}
     if request.method == "POST":
         if request.is_json:
@@ -94,7 +111,6 @@ def predict_fit():
         else:
             return jsonify({"error": "Content-Type must be application/json"}), 415
 
-    # Merge manual input with Fit data for model
     final_data = {
         "age": manual_data.get("age", 30),
         "gender": manual_data.get("gender", 1),
@@ -107,7 +123,7 @@ def predict_fit():
         "smoke": manual_data.get("smoke", 0),
         "alco": manual_data.get("alco", 0),
         "active": 1 if fit_data["avg_steps"] > 5000 else 0,
-        "bmi": manual_data.get("bmi", fit_data["weight"] / (fit_data["height"]**2))
+        "bmi": manual_data.get("bmi", fit_data["weight"] / (fit_data["height"] ** 2))
     }
 
     pred_class, pred_proba = predict_heart_attack(final_data)
@@ -121,4 +137,5 @@ def predict_fit():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
