@@ -3,7 +3,7 @@ import pandas as pd
 import os
 
 # ---------------- LOAD MODEL ----------------
-MODEL_PATH = r"D:\hridamrit\backend\best_model\best_final_pipeline.pkl"
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "best_model", "best_final_pipeline.pkl")
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"❌ Model file not found at {MODEL_PATH}")
